@@ -1,4 +1,6 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:neo_bluetooth_module/ble/ble.dart';
 
 void main() {
   runApp(const MyApp());
@@ -7,116 +9,407 @@ void main() {
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
 
-  // This widget is the root of your application.
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Flutter Demo',
+      title: 'BLE JSON Module Demo',
       theme: ThemeData(
-        // This is the theme of your application.
-        //
-        // TRY THIS: Try running your application with "flutter run". You'll see
-        // the application has a purple toolbar. Then, without quitting the app,
-        // try changing the seedColor in the colorScheme below to Colors.green
-        // and then invoke "hot reload" (save your changes or press the "hot
-        // reload" button in a Flutter-supported IDE, or press "r" if you used
-        // the command line to start the app).
-        //
-        // Notice that the counter didn't reset back to zero; the application
-        // state is not lost during the reload. To reset the state, use hot
-        // restart instead.
-        //
-        // This works for code too, not just values: Most code changes can be
-        // tested with just a hot reload.
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
+        useMaterial3: true,
       ),
-      home: const MyHomePage(title: 'Flutter Demo Home Page'),
+      home: const BleDemoPage(),
     );
   }
 }
 
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
+class BleDemoPage extends StatefulWidget {
+  const BleDemoPage({super.key});
 
   @override
-  State<MyHomePage> createState() => _MyHomePageState();
+  State<BleDemoPage> createState() => _BleDemoPageState();
 }
 
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
+class _BleDemoPageState extends State<BleDemoPage> {
+  final BleManager _manager = BleManager();
+  final List<BleDeviceInfo> _devices = [];
+  BleDeviceConnection? _connection;
+  BleGattInfo? _gattInfo;
+  BleJsonConnection? _jsonConnection;
+  GattServiceInfo? _selectedService;
+  GattCharInfo? _selectedCharacteristic;
+  final TextEditingController _jsonController = TextEditingController();
+  bool _isScanning = false;
+  String _statusMessage = 'Ready to scan';
 
-  void _incrementCounter() {
+  @override
+  void initState() {
+    super.initState();
+    _jsonController.text = '{"command": "setAnimation", "name": "wave", "speed": 0.7}';
+  }
+
+  @override
+  void dispose() {
+    _manager.dispose();
+    _jsonController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _startScan() async {
     setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
+      _isScanning = true;
+      _devices.clear();
+      _statusMessage = 'Scanning...';
     });
+
+    try {
+      await _manager.scan();
+      _manager.scanResults.listen((device) {
+        if (!mounted) return;
+        setState(() {
+          if (!_devices.any((d) => d.id == device.id)) {
+            _devices.add(device);
+          }
+        });
+      });
+    } catch (e) {
+      setState(() {
+        _statusMessage = 'Error: $e';
+        _isScanning = false;
+      });
+    }
+  }
+
+  Future<void> _stopScan() async {
+    await _manager.stopScan();
+    setState(() {
+      _isScanning = false;
+      _statusMessage = 'Scan stopped';
+    });
+  }
+
+  Future<void> _connectToDevice(BleDeviceInfo device) async {
+    setState(() {
+      _statusMessage = 'Connecting...';
+    });
+
+    try {
+      final connection = await _manager.connect(device);
+      connection.connectionState.listen((state) {
+        if (!mounted) return;
+        setState(() {
+          switch (state) {
+            case BleConnectionState.connecting:
+              _statusMessage = 'Connecting...';
+              break;
+            case BleConnectionState.connected:
+              _statusMessage = 'Connected';
+              break;
+            case BleConnectionState.disconnected:
+              _statusMessage = 'Disconnected';
+              _connection = null;
+              _gattInfo = null;
+              _jsonConnection = null;
+              break;
+            case BleConnectionState.error:
+              _statusMessage = 'Connection error';
+              break;
+          }
+        });
+      });
+
+      setState(() {
+        _connection = connection;
+        _statusMessage = 'Connected';
+      });
+
+      await _discoverGatt(connection);
+    } catch (e) {
+      setState(() {
+        _statusMessage = 'Connection failed: $e';
+      });
+    }
+  }
+
+  Future<void> _discoverGatt(BleDeviceConnection connection) async {
+    setState(() {
+      _statusMessage = 'Discovering GATT...';
+    });
+
+    try {
+      final gatt = await _manager.discoverGatt(connection);
+      setState(() {
+        _gattInfo = gatt;
+        _statusMessage = 'GATT discovered: ${gatt.services.length} services';
+      });
+    } catch (e) {
+      setState(() {
+        _statusMessage = 'GATT discovery failed: $e';
+      });
+    }
+  }
+
+  Future<void> _selectCharacteristic(GattServiceInfo service, GattCharInfo characteristic) async {
+    if (!characteristic.canWrite) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Characteristic does not support write')),
+      );
+      return;
+    }
+
+    try {
+      final jsonConn = await _manager.createJsonConnection(
+        _connection!,
+        service.uuid,
+        characteristic.uuid,
+      );
+
+      setState(() {
+        _selectedService = service;
+        _selectedCharacteristic = characteristic;
+        _jsonConnection = jsonConn;
+        _statusMessage = 'Ready to send JSON';
+      });
+    } catch (e) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Error: $e')),
+      );
+    }
+  }
+
+  Future<void> _sendJson() async {
+    if (_jsonConnection == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No characteristic selected')),
+      );
+      return;
+    }
+
+    try {
+      final jsonString = _jsonController.text.trim();
+      if (jsonString.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Please enter JSON data')),
+        );
+        return;
+      }
+
+      // Try to parse as JSON first
+      try {
+        final json = jsonDecode(jsonString) as Map<String, dynamic>;
+        await _jsonConnection!.sendJson(json);
+      } catch (e) {
+        // If parsing fails, send as string
+        await _jsonConnection!.sendJsonString(jsonString);
+      }
+
+      setState(() {
+        _statusMessage = 'JSON sent successfully';
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('JSON sent successfully')),
+      );
+    } catch (e) {
+      setState(() {
+        _statusMessage = 'Send failed: $e';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Send failed: $e')),
+      );
+    }
+  }
+
+  Future<void> _disconnect() async {
+    if (_connection != null) {
+      await _manager.disconnect(_connection!);
+      setState(() {
+        _connection = null;
+        _gattInfo = null;
+        _jsonConnection = null;
+        _selectedService = null;
+        _selectedCharacteristic = null;
+        _statusMessage = 'Disconnected';
+      });
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
+        title: const Text('BLE JSON Module Demo'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
       ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(16.0),
         child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            // Status
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16.0),
+                child: Text(
+                  'Status: $_statusMessage',
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
             ),
+            const SizedBox(height: 16),
+
+            // Scan controls
+            Row(
+              children: [
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _isScanning ? null : _startScan,
+                    child: const Text('Start Scan'),
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton(
+                    onPressed: _isScanning ? _stopScan : null,
+                    child: const Text('Stop Scan'),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+
+            // Device list
+            if (_devices.isNotEmpty) ...[
+              Text(
+                'Found Devices (${_devices.length}):',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              ...(_devices.map((device) => Card(
+                    child: ListTile(
+                      title: Text(device.name ?? 'Unknown Device'),
+                      subtitle: Text('ID: ${device.id}\nRSSI: ${device.rssi} dBm'),
+                      trailing: _connection?.deviceInfo.id == device.id
+                          ? const Icon(Icons.check_circle, color: Colors.green)
+                          : null,
+                      onTap: _connection == null
+                          ? () => _connectToDevice(device)
+                          : null,
+                    ),
+                  ))),
+              const SizedBox(height: 16),
+            ],
+
+            // Connection info
+            if (_connection != null) ...[
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Connected Device',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Text('Name: ${_connection!.deviceInfo.name ?? "Unknown"}'),
+                      Text('ID: ${_connection!.deviceInfo.id}'),
+                      const SizedBox(height: 8),
+                      ElevatedButton(
+                        onPressed: _disconnect,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                        ),
+                        child: const Text('Disconnect'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+
+            // GATT services
+            if (_gattInfo != null) ...[
+              Text(
+                'GATT Services (${_gattInfo!.services.length}):',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              ...(_gattInfo!.services.map((service) => Card(
+                    child: ExpansionTile(
+                      title: Text('Service: ${service.uuid}'),
+                      subtitle: Text(
+                          '${service.characteristics.length} characteristics'),
+                      children: [
+                        ...(service.characteristics.map((char) => ListTile(
+                              title: Text('Characteristic: ${char.uuid}'),
+                              subtitle: Text(
+                                  'Read: ${char.canRead}, Write: ${char.canWrite}, Notify: ${char.canNotify}'),
+                              trailing: char.canWrite
+                                  ? ElevatedButton(
+                                      onPressed: () =>
+                                          _selectCharacteristic(service, char),
+                                      child: const Text('Select'),
+                                    )
+                                  : null,
+                            ))),
+                      ],
+                    ),
+                  ))),
+              const SizedBox(height: 16),
+            ],
+
+            // Selected characteristic
+            if (_selectedCharacteristic != null) ...[
+              Card(
+                color: Colors.green.shade50,
+                child: Padding(
+                  padding: const EdgeInsets.all(16.0),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Selected Characteristic',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                          'Service: ${_selectedService!.uuid}'),
+                      Text(
+                          'Characteristic: ${_selectedCharacteristic!.uuid}'),
+                    ],
+                  ),
+                ),
+              ),
+              const SizedBox(height: 16),
+            ],
+
+            // JSON input
+            if (_jsonConnection != null) ...[
+              Text(
+                'Send JSON:',
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                controller: _jsonController,
+                maxLines: 5,
+                decoration: const InputDecoration(
+                  border: OutlineInputBorder(),
+                  hintText: 'Enter JSON data',
+                ),
+              ),
+              const SizedBox(height: 8),
+              ElevatedButton(
+                onPressed: _sendJson,
+                child: const Text('Send JSON'),
+              ),
+            ],
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
     );
   }
 }
