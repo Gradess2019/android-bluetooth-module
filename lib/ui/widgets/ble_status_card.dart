@@ -20,7 +20,7 @@ class BleStatusCard extends StatelessWidget {
   final bool showPrefix;
 
   /// Custom card style
-  final CardStyle? cardStyle;
+  final BleStatusCardStyle? cardStyle;
 
   /// Custom text style
   final TextStyle? textStyle;
@@ -71,13 +71,13 @@ class BleStatusCard extends StatelessWidget {
 }
 
 /// Custom styling options for the status card
-class CardStyle {
+class BleStatusCardStyle {
   final Color? color;
   final double? elevation;
   final ShapeBorder? shape;
   final EdgeInsets? padding;
 
-  const CardStyle({
+  const BleStatusCardStyle({
     this.color,
     this.elevation,
     this.shape,

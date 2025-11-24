@@ -294,110 +294,37 @@ class _BleDemoPageState extends State<BleDemoPage> {
 
             // Connection info
             if (_connection != null) ...[
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Connected Device',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 8),
-                      Text('Name: ${_connection!.deviceInfo.name ?? "Unknown"}'),
-                      Text('ID: ${_connection!.deviceInfo.id}'),
-                      const SizedBox(height: 8),
-                      ElevatedButton(
-                        onPressed: _disconnect,
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red,
-                          foregroundColor: Colors.white,
-                        ),
-                        child: const Text('Disconnect'),
-                      ),
-                    ],
-                  ),
-                ),
+              BleConnectedDeviceCard(
+                connection: _connection!,
+                onDisconnect: _disconnect,
               ),
               const SizedBox(height: 16),
             ],
 
             // GATT services
             if (_gattInfo != null) ...[
-              Text(
-                'GATT Services (${_gattInfo!.services.length}):',
-                style: Theme.of(context).textTheme.titleMedium,
+              BleGattServicesList(
+                gattInfo: _gattInfo!,
+                onCharacteristicSelected: _selectCharacteristic,
               ),
-              const SizedBox(height: 8),
-              ...(_gattInfo!.services.map((service) => Card(
-                    child: ExpansionTile(
-                      title: Text('Service: ${service.uuid}'),
-                      subtitle: Text(
-                          '${service.characteristics.length} characteristics'),
-                      children: [
-                        ...(service.characteristics.map((char) => ListTile(
-                              title: Text('Characteristic: ${char.uuid}'),
-                              subtitle: Text(
-                                  'Read: ${char.canRead}, Write: ${char.canWrite}, Notify: ${char.canNotify}'),
-                              trailing: char.canWrite
-                                  ? ElevatedButton(
-                                      onPressed: () =>
-                                          _selectCharacteristic(service, char),
-                                      child: const Text('Select'),
-                                    )
-                                  : null,
-                            ))),
-                      ],
-                    ),
-                  ))),
               const SizedBox(height: 16),
             ],
 
             // Selected characteristic
-            if (_selectedCharacteristic != null) ...[
-              Card(
-                color: Colors.green.shade50,
-                child: Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        'Selected Characteristic',
-                        style: Theme.of(context).textTheme.titleMedium,
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                          'Service: ${_selectedService!.uuid}'),
-                      Text(
-                          'Characteristic: ${_selectedCharacteristic!.uuid}'),
-                    ],
-                  ),
-                ),
+            if (_selectedCharacteristic != null && _selectedService != null) ...[
+              BleSelectedCharacteristicCard(
+                service: _selectedService!,
+                characteristic: _selectedCharacteristic!,
               ),
               const SizedBox(height: 16),
             ],
 
             // JSON input
             if (_jsonConnection != null) ...[
-              Text(
-                'Send JSON:',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 8),
-              TextField(
+              BleJsonTextField(
                 controller: _jsonController,
-                maxLines: 5,
-                decoration: const InputDecoration(
-                  border: OutlineInputBorder(),
-                  hintText: 'Enter JSON data',
-                ),
-              ),
-              const SizedBox(height: 8),
-              ElevatedButton(
-                onPressed: _sendJson,
-                child: const Text('Send JSON'),
+                onSend: _sendJson,
+                sectionLabel: 'Send JSON:',
               ),
             ],
           ],
