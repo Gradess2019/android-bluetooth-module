@@ -140,9 +140,30 @@ class BleManager {
       rethrow;
     }
 
+    // Get the current connection state and emit it immediately to the controller
+    // This ensures listeners get the current state when they subscribe
+    final currentState = await targetDevice.connectionState.first;
+    BleConnectionState mappedState;
+    switch (currentState) {
+      case BluetoothConnectionState.connected:
+        mappedState = BleConnectionState.connected;
+        break;
+      case BluetoothConnectionState.disconnected:
+        mappedState = BleConnectionState.disconnected;
+        break;
+      default:
+        mappedState = BleConnectionState.error;
+    }
+    
+    // Emit the current state to the controller so it's available for listeners
+    connectionStateController.add(mappedState);
+    
+    // Create a broadcast stream for multiple listeners
+    final connectionStateStream = connectionStateController.stream.asBroadcastStream();
+
     final connection = BleDeviceConnection(
       deviceInfo: deviceInfo,
-      connectionState: connectionStateController.stream,
+      connectionState: connectionStateStream,
       device: targetDevice,
     );
 

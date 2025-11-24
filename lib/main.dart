@@ -94,6 +94,16 @@ class _BleDemoPageState extends State<BleDemoPage> {
 
     try {
       final connection = await _manager.connect(device);
+      
+      // Set connection immediately so UI can show it
+      if (mounted) {
+        setState(() {
+          _connection = connection;
+          _statusMessage = 'Connected';
+        });
+      }
+      
+      // Set up listener for connection state changes
       connection.connectionState.listen((state) {
         if (!mounted) return;
         setState(() {
@@ -103,6 +113,8 @@ class _BleDemoPageState extends State<BleDemoPage> {
               break;
             case BleConnectionState.connected:
               _statusMessage = 'Connected';
+              // Ensure connection is always set when connected
+              _connection = connection;
               break;
             case BleConnectionState.disconnected:
               _statusMessage = 'Disconnected';
@@ -116,11 +128,17 @@ class _BleDemoPageState extends State<BleDemoPage> {
           }
         });
       });
-
-      setState(() {
-        _connection = connection;
-        _statusMessage = 'Connected';
-      });
+      
+      // Force a rebuild to ensure UI updates
+      if (mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) {
+            setState(() {
+              // Trigger rebuild to ensure Connected Device section appears
+            });
+          }
+        });
+      }
 
       await _discoverGatt(connection);
     } catch (e) {
