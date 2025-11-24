@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:neo_bluetooth_module/ble/ble.dart';
+import 'package:neo_bluetooth_module/ui/ui.dart';
 
 void main() {
   runApp(const MyApp());
@@ -254,9 +255,8 @@ class _BleDemoPageState extends State<BleDemoPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('BLE JSON Module Demo'),
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+      appBar: const BleAppBar(
+        title: 'BLE JSON Module Demo',
       ),
       body: SingleChildScrollView(
         padding: const EdgeInsets.all(16.0),
@@ -264,34 +264,14 @@ class _BleDemoPageState extends State<BleDemoPage> {
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             // Status
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16.0),
-                child: Text(
-                  'Status: $_statusMessage',
-                  style: Theme.of(context).textTheme.titleMedium,
-                ),
-              ),
-            ),
+            BleStatusCard(statusMessage: _statusMessage),
             const SizedBox(height: 16),
 
             // Scan controls
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: _isScanning ? null : _startScan,
-                    child: const Text('Start Scan'),
-                  ),
-                ),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: _isScanning ? _stopScan : null,
-                    child: const Text('Stop Scan'),
-                  ),
-                ),
-              ],
+            BleScanButtons(
+              isScanning: _isScanning,
+              onStartScan: _startScan,
+              onStopScan: _stopScan,
             ),
             const SizedBox(height: 16),
 
@@ -302,17 +282,12 @@ class _BleDemoPageState extends State<BleDemoPage> {
                 style: Theme.of(context).textTheme.titleMedium,
               ),
               const SizedBox(height: 8),
-              ...(_devices.map((device) => Card(
-                    child: ListTile(
-                      title: Text(device.name ?? 'Unknown Device'),
-                      subtitle: Text('ID: ${device.id}\nRSSI: ${device.rssi} dBm'),
-                      trailing: _connection?.deviceInfo.id == device.id
-                          ? const Icon(Icons.check_circle, color: Colors.green)
-                          : null,
-                      onTap: _connection == null
-                          ? () => _connectToDevice(device)
-                          : null,
-                    ),
+              ...(_devices.map((device) => BleDeviceItem(
+                    device: device,
+                    isConnected: _connection?.deviceInfo.id == device.id,
+                    onTap: _connection == null
+                        ? () => _connectToDevice(device)
+                        : null,
                   ))),
               const SizedBox(height: 16),
             ],
