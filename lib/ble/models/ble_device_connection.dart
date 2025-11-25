@@ -5,6 +5,7 @@ import 'ble_device_info.dart';
 enum BleConnectionState {
   connecting,
   connected,
+  disconnecting,
   disconnected,
   error,
 }

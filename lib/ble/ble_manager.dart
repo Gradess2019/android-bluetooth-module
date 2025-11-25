@@ -117,8 +117,12 @@ class BleManager {
         case BluetoothConnectionState.disconnected:
           mappedState = BleConnectionState.disconnected;
           break;
-        default:
-          mappedState = BleConnectionState.error;
+        case BluetoothConnectionState.connecting:
+          mappedState = BleConnectionState.connecting;
+          break;
+        case BluetoothConnectionState.disconnecting:
+          mappedState = BleConnectionState.disconnecting;
+          break;
       }
       connectionStateController.add(mappedState);
     });
@@ -151,8 +155,12 @@ class BleManager {
       case BluetoothConnectionState.disconnected:
         mappedState = BleConnectionState.disconnected;
         break;
-      default:
-        mappedState = BleConnectionState.error;
+      case BluetoothConnectionState.connecting:
+        mappedState = BleConnectionState.connecting;
+        break;
+      case BluetoothConnectionState.disconnecting:
+        mappedState = BleConnectionState.disconnecting;
+        break;
     }
     
     // Emit the current state to the controller so it's available for listeners
@@ -267,9 +275,26 @@ class BleManager {
           'Characteristic does not support write: $characteristicUuid');
     }
 
+    // Try to get MTU from device, fallback to default (20 bytes payload)
+    int? mtuPayload;
+    try {
+      // Attempt to get MTU - flutter_blue_plus may provide it via mtu property or stream
+      // MTU payload = MTU - 3 (for ATT header)
+      final mtu = await deviceConnection.device.mtu.first.timeout(
+        const Duration(seconds: 1),
+      );
+      if (mtu > 3) {
+        mtuPayload = mtu - 3;
+      }
+    } catch (e) {
+      // MTU not available or failed to get, use default
+      mtuPayload = null;
+    }
+
     return BleJsonConnection(
       deviceConnection: deviceConnection,
       characteristic: targetChar,
+      mtuPayload: mtuPayload,
     );
   }
 

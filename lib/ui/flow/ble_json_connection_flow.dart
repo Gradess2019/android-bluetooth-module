@@ -157,6 +157,9 @@ class _BleJsonConnectionFlowState extends State<BleJsonConnectionFlow> {
               _statusMessage = 'Connected';
               _connection = connection;
               break;
+            case BleConnectionState.disconnecting:
+              _statusMessage = 'Disconnecting...';
+              break;
             case BleConnectionState.disconnected:
               _statusMessage = 'Disconnected';
               _connection = null;

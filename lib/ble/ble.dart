@@ -10,4 +10,5 @@ export 'models/ble_device_info.dart';
 export 'models/ble_device_connection.dart';
 export 'models/ble_gatt_info.dart';
 export 'models/ble_json_connection.dart';
+export 'models/ble_write_error.dart';
 

@@ -117,6 +117,9 @@ class _BleDemoPageState extends State<BleDemoPage> {
               // Ensure connection is always set when connected
               _connection = connection;
               break;
+            case BleConnectionState.disconnecting:
+              _statusMessage = 'Disconnecting...';
+              break;
             case BleConnectionState.disconnected:
               _statusMessage = 'Disconnected';
               _connection = null;
