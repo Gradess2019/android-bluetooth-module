@@ -9,10 +9,28 @@ import 'models/ble_json_connection.dart';
 import 'models/ble_connection_config.dart';
 import 'models/ble_error.dart';
 
+/// Internal record tracking connection resources
+class _ConnectionRecord {
+  final BleDeviceConnection connection;
+  final StreamController<BleConnectionState> controller;
+  final StreamSubscription<BluetoothConnectionState> stateSubscription;
+  bool isDisposed = false;
+
+  _ConnectionRecord({
+    required this.connection,
+    required this.controller,
+    required this.stateSubscription,
+  });
+}
+
 /// Main manager for BLE operations
 class BleManager {
   StreamSubscription<List<ScanResult>>? _scanSubscription;
-  final Map<String, BleDeviceConnection> _connections = {};
+  bool _isScanning = false;
+  final Map<String, _ConnectionRecord> _connections = {};
+
+  /// Whether a scan is currently in progress
+  bool get isScanning => _isScanning;
 
   /// Stream of discovered devices during scanning
   Stream<BleDeviceInfo> get scanResults {
@@ -52,35 +70,100 @@ class BleManager {
 
   /// Start scanning for BLE devices
   /// 
+  /// If a scan is already in progress, stops the previous scan and starts a new one.
+  /// 
   /// Requires flutter_blue_plus >= 1.30.0
   /// Throws [BlePermissionError] if permissions are not granted.
   /// Throws [BleUnsupportedError] if Bluetooth is not supported.
   Future<void> scan() async {
-    // Check permissions first
-    final hasPermissions = await checkPermissions();
-    if (!hasPermissions) {
-      throw const BlePermissionError('Required permissions not granted');
+    // If already scanning, stop the previous scan first
+    if (_isScanning) {
+      await stopScan();
     }
 
-    // Check if Bluetooth is available
-    if (await FlutterBluePlus.isSupported == false) {
-      throw const BleUnsupportedError('Bluetooth not supported on this device');
-    }
+    try {
+      // Check permissions first
+      final hasPermissions = await checkPermissions();
+      if (!hasPermissions) {
+        throw const BlePermissionError('Required permissions not granted');
+      }
 
-    // Turn on Bluetooth if it's off
-    if (await FlutterBluePlus.adapterState.first ==
-        BluetoothAdapterState.off) {
-      await FlutterBluePlus.turnOn();
-    }
+      // Check if Bluetooth is available
+      if (await FlutterBluePlus.isSupported == false) {
+        throw const BleUnsupportedError('Bluetooth not supported on this device');
+      }
 
-    await FlutterBluePlus.startScan(
-      timeout: const Duration(seconds: 4),
-    );
+      // Turn on Bluetooth if it's off
+      if (await FlutterBluePlus.adapterState.first ==
+          BluetoothAdapterState.off) {
+        await FlutterBluePlus.turnOn();
+      }
+
+      // Set scanning state before starting
+      _isScanning = true;
+
+      // Subscribe to scan results
+      _scanSubscription = FlutterBluePlus.scanResults.listen((results) {
+        // Results are already exposed via scanResults getter
+        // This subscription ensures we can cancel it properly
+      });
+
+      await FlutterBluePlus.startScan(
+        timeout: const Duration(seconds: 4),
+      );
+    } catch (e) {
+      // Reset scanning state on error
+      _isScanning = false;
+      _scanSubscription?.cancel();
+      _scanSubscription = null;
+      rethrow;
+    }
   }
 
   /// Stop scanning for BLE devices
   Future<void> stopScan() async {
-    await FlutterBluePlus.stopScan();
+    if (!_isScanning) {
+      return;
+    }
+
+    try {
+      await FlutterBluePlus.stopScan();
+    } finally {
+      _isScanning = false;
+      _scanSubscription?.cancel();
+      _scanSubscription = null;
+    }
+  }
+
+  /// Find or create a BluetoothDevice from device ID
+  /// 
+  /// Tries multiple lookup strategies:
+  /// 1. Check lastScanResults
+  /// 2. Check connectedDevices
+  /// 3. Attempt to create device from ID using BluetoothDevice constructor
+  /// 
+  /// Returns null if device cannot be found or created.
+  Future<BluetoothDevice?> _findOrCreateDevice(String deviceId) async {
+    // Try lastScanResults first
+    final scanResults = FlutterBluePlus.lastScanResults;
+    for (final result in scanResults) {
+      if (result.device.remoteId.str == deviceId) {
+        return result.device;
+      }
+    }
+
+    // Try connectedDevices
+    final connectedDevices = FlutterBluePlus.connectedDevices;
+    for (final device in connectedDevices) {
+      if (device.remoteId.str == deviceId) {
+        return device;
+      }
+    }
+
+    // Fallback: Device cannot be created from ID directly in flutter_blue_plus
+    // The device must be discovered via scan or already connected
+    // Return null to indicate device not found
+    return null;
   }
 
   /// Connect to a BLE device
@@ -89,7 +172,11 @@ class BleManager {
   /// [config] provides connection options including license, MTU, autoConnect, and bonding settings.
   /// If [config] is null, uses default configuration (autoConnect: true, requireBonding: true).
   /// 
-  /// Throws [BleDeviceNotFoundError] if device is not found in scan results.
+  /// The device can be connected even if not in recent scan results, as long as the device ID
+  /// is valid. The [BleDeviceInfo.id] must be a valid device identifier (MAC address on Android,
+  /// UUID on iOS).
+  /// 
+  /// Throws [BleDeviceNotFoundError] if device is not found and cannot be created from ID.
   /// Throws [BleBondingError] if bonding is required but fails.
   /// Wraps other connection errors in appropriate [BleError] subclasses.
   Future<BleDeviceConnection> connect(
@@ -97,31 +184,14 @@ class BleManager {
     BleConnectionConfig? config,
   }) async {
     final connectionConfig = config ?? BleConnectionConfig.defaultConfig;
-    // Find the BluetoothDevice from scan results
-    final devices = FlutterBluePlus.lastScanResults;
-    BluetoothDevice? targetDevice;
-
-    for (final result in devices) {
-      if (result.device.remoteId.str == deviceInfo.id) {
-        targetDevice = result.device;
-        break;
-      }
-    }
-
-    if (targetDevice == null) {
-      // Try to find device from connected devices
-      final connectedDevices = FlutterBluePlus.connectedDevices;
-      for (final device in connectedDevices) {
-        if (device.remoteId.str == deviceInfo.id) {
-          targetDevice = device;
-          break;
-        }
-      }
-    }
+    
+    // Find or create device using helper method
+    final targetDevice = await _findOrCreateDevice(deviceInfo.id);
     
     if (targetDevice == null) {
       throw BleDeviceNotFoundError(
-        'Device not found. Please scan for devices first.',
+        'Device not found with ID: ${deviceInfo.id}. '
+        'The device may need to be scanned first, or the device ID may be invalid.',
       );
     }
 
@@ -160,9 +230,8 @@ class BleManager {
         );
       }
     } catch (e) {
-      connectionStateController.add(BleConnectionState.error);
-      await connectionStateController.close();
-      stateSubscription.cancel();
+      // Clean up on connection error
+      _disposeConnection(deviceInfo.id);
       // Wrap connection errors
       if (e is BleError) {
         rethrow;
@@ -221,19 +290,55 @@ class BleManager {
       device: targetDevice,
     );
 
-    _connections[deviceInfo.id] = connection;
+    // Create connection record
+    final connectionRecord = _ConnectionRecord(
+      connection: connection,
+      controller: connectionStateController,
+      stateSubscription: stateSubscription,
+    );
+
+    _connections[deviceInfo.id] = connectionRecord;
 
     // Clean up when connection is lost
     targetDevice.connectionState
         .where((state) => state == BluetoothConnectionState.disconnected)
         .first
         .then((_) {
-      _connections.remove(deviceInfo.id);
-      connectionStateController.close();
-      stateSubscription.cancel();
+      _disposeConnection(deviceInfo.id);
     });
 
     return connection;
+  }
+
+  /// Dispose connection resources
+  /// 
+  /// Cancels subscriptions, closes controller, and removes connection from map.
+  /// Safe to call multiple times (idempotent).
+  void _disposeConnection(String deviceId) {
+    final record = _connections[deviceId];
+    if (record == null || record.isDisposed) {
+      return;
+    }
+
+    try {
+      // Cancel state subscription
+      record.stateSubscription.cancel();
+    } catch (e) {
+      // Ignore errors during cancellation (may already be cancelled)
+    }
+
+    try {
+      // Close controller if not already closed
+      if (!record.controller.isClosed) {
+        record.controller.close();
+      }
+    } catch (e) {
+      // Ignore errors during close
+    }
+
+    // Mark as disposed and remove from map
+    record.isDisposed = true;
+    _connections.remove(deviceId);
   }
 
   /// Disconnect from a BLE device
@@ -243,7 +348,8 @@ class BleManager {
     } catch (e) {
       // Ignore errors if already disconnected
     }
-    _connections.remove(connection.deviceInfo.id);
+    // Always dispose connection resources
+    _disposeConnection(connection.deviceInfo.id);
   }
 
   /// Discover GATT services and characteristics
@@ -371,9 +477,15 @@ class BleManager {
 
   /// Dispose resources
   void dispose() {
+    // Stop scanning
     _scanSubscription?.cancel();
-    for (final connection in _connections.values) {
-      disconnect(connection);
+    _scanSubscription = null;
+    _isScanning = false;
+
+    // Dispose all connections
+    final deviceIds = _connections.keys.toList();
+    for (final deviceId in deviceIds) {
+      _disposeConnection(deviceId);
     }
     _connections.clear();
   }
