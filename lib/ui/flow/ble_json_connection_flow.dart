@@ -1,36 +1,76 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:neo_bluetooth_module/ble/ble.dart';
-import 'package:neo_bluetooth_module/ui/ui.dart';
+import '../ui.dart';
 
-void main() {
-  runApp(const MyApp());
-}
+/// A complete, reusable BLE JSON connection flow widget
+/// 
+/// This widget manages the entire BLE connection workflow:
+/// - Scanning for devices
+/// - Connecting to a device
+/// - Discovering GATT services
+/// - Selecting a characteristic
+/// - Sending JSON data
+/// 
+/// Can be used as a standalone page or embedded widget.
+class BleJsonConnectionFlow extends StatefulWidget {
+  /// Callback when flow completes successfully
+  final void Function(BleJsonConnectionResult)? onComplete;
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
+  /// Callback when user cancels the flow
+  final VoidCallback? onCancel;
 
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      title: 'BLE JSON Module Demo',
-      theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.blue),
-        useMaterial3: true,
+  /// Pre-filled JSON text
+  final String? initialJsonText;
+
+  /// App bar title
+  final String appBarTitle;
+
+  /// Whether to automatically discover GATT after connection
+  final bool autoDiscoverGatt;
+
+  const BleJsonConnectionFlow({
+    super.key,
+    this.onComplete,
+    this.onCancel,
+    this.initialJsonText,
+    this.appBarTitle = 'BLE Connection',
+    this.autoDiscoverGatt = true,
+  });
+
+  /// Helper method to navigate to the flow and get result
+  static Future<BleJsonConnectionResult?> navigate(
+    BuildContext context, {
+    String? initialJsonText,
+    String appBarTitle = 'BLE Connection',
+  }) async {
+    BleJsonConnectionResult? result;
+
+    await Navigator.push<BleJsonConnectionResult>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => BleJsonConnectionFlow(
+          appBarTitle: appBarTitle,
+          initialJsonText: initialJsonText,
+          onComplete: (r) {
+            result = r;
+            Navigator.of(context).pop(r);
+          },
+          onCancel: () {
+            Navigator.of(context).pop(BleJsonConnectionResult.cancelled());
+          },
+        ),
       ),
-      home: const BleDemoPage(),
     );
-  }
-}
 
-class BleDemoPage extends StatefulWidget {
-  const BleDemoPage({super.key});
+    return result;
+  }
 
   @override
-  State<BleDemoPage> createState() => _BleDemoPageState();
+  State<BleJsonConnectionFlow> createState() => _BleJsonConnectionFlowState();
 }
 
-class _BleDemoPageState extends State<BleDemoPage> {
+class _BleJsonConnectionFlowState extends State<BleJsonConnectionFlow> {
   final BleManager _manager = BleManager();
   final List<BleDeviceInfo> _devices = [];
   BleDeviceConnection? _connection;
@@ -45,7 +85,8 @@ class _BleDemoPageState extends State<BleDemoPage> {
   @override
   void initState() {
     super.initState();
-    _jsonController.text = '{"command": "setAnimation", "name": "wave", "speed": 0.7}';
+    _jsonController.text = widget.initialJsonText ??
+        '{"command": "setAnimation", "name": "wave", "speed": 0.7}';
   }
 
   @override
@@ -95,7 +136,7 @@ class _BleDemoPageState extends State<BleDemoPage> {
 
     try {
       final connection = await _manager.connect(device);
-      
+
       // Set connection immediately so UI can show it
       if (mounted) {
         setState(() {
@@ -103,7 +144,7 @@ class _BleDemoPageState extends State<BleDemoPage> {
           _statusMessage = 'Connected';
         });
       }
-      
+
       // Set up listener for connection state changes
       connection.connectionState.listen((state) {
         if (!mounted) return;
@@ -114,7 +155,6 @@ class _BleDemoPageState extends State<BleDemoPage> {
               break;
             case BleConnectionState.connected:
               _statusMessage = 'Connected';
-              // Ensure connection is always set when connected
               _connection = connection;
               break;
             case BleConnectionState.disconnected:
@@ -129,7 +169,7 @@ class _BleDemoPageState extends State<BleDemoPage> {
           }
         });
       });
-      
+
       // Force a rebuild to ensure UI updates
       if (mounted) {
         WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -141,7 +181,9 @@ class _BleDemoPageState extends State<BleDemoPage> {
         });
       }
 
-      await _discoverGatt(connection);
+      if (widget.autoDiscoverGatt) {
+        await _discoverGatt(connection);
+      }
     } catch (e) {
       setState(() {
         _statusMessage = 'Connection failed: $e';
@@ -167,7 +209,8 @@ class _BleDemoPageState extends State<BleDemoPage> {
     }
   }
 
-  Future<void> _selectCharacteristic(GattServiceInfo service, GattCharInfo characteristic) async {
+  Future<void> _selectCharacteristic(
+      GattServiceInfo service, GattCharInfo characteristic) async {
     if (!characteristic.canWrite) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Characteristic does not support write')),
@@ -228,6 +271,16 @@ class _BleDemoPageState extends State<BleDemoPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('JSON sent successfully')),
       );
+
+      // Call onComplete with success result
+      if (widget.onComplete != null && _jsonConnection != null) {
+        widget.onComplete!(BleJsonConnectionResult.success(
+          jsonConnection: _jsonConnection!,
+          deviceConnection: _connection!,
+          selectedService: _selectedService!,
+          selectedCharacteristic: _selectedCharacteristic!,
+        ));
+      }
     } catch (e) {
       setState(() {
         _statusMessage = 'Send failed: $e';
@@ -252,61 +305,100 @@ class _BleDemoPageState extends State<BleDemoPage> {
     }
   }
 
+  void _handleBack() {
+    if (widget.onCancel != null) {
+      widget.onCancel!();
+    } else {
+      // Default: return cancelled result
+      if (widget.onComplete != null) {
+        widget.onComplete!(BleJsonConnectionResult.cancelled());
+      }
+      Navigator.of(context).pop(BleJsonConnectionResult.cancelled());
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: const BleAppBar(
-        title: 'BLE JSON Module Demo',
-      ),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            // Scan section
-            BleScanSection(
-              statusMessage: _statusMessage,
-              isScanning: _isScanning,
-              onStartScan: _startScan,
-              onStopScan: _stopScan,
-            ),
-            const SizedBox(height: 16),
-
-            // Device list section
-            BleDeviceListSection(
-              devices: _devices,
-              connectedDeviceId: _connection?.deviceInfo.id,
-              onDeviceTap: _connection == null
-                  ? (device) => _connectToDevice(device)
-                  : null,
-            ),
-            if (_devices.isNotEmpty) const SizedBox(height: 16),
-
-            // Connection section
-            BleConnectionSection(
-              connection: _connection,
-              onDisconnect: _disconnect,
-            ),
-            if (_connection != null) const SizedBox(height: 16),
-
-            // GATT section
-            BleGattSection(
-              gattInfo: _gattInfo,
-              onCharacteristicSelected: _selectCharacteristic,
-            ),
-            if (_gattInfo != null) const SizedBox(height: 16),
-
-            // JSON section
-            BleJsonSection(
-              selectedService: _selectedService,
-              selectedCharacteristic: _selectedCharacteristic,
-              jsonConnection: _jsonConnection,
-              jsonController: _jsonController,
-              onSend: _sendJson,
-            ),
+    return PopScope(
+      canPop: false,
+      onPopInvokedWithResult: (didPop, result) {
+        if (!didPop) {
+          _handleBack();
+        }
+      },
+      child: Scaffold(
+        appBar: BleAppBar(
+          title: widget.appBarTitle,
+          actions: [
+            if (_jsonConnection != null)
+              IconButton(
+                icon: const Icon(Icons.check),
+                tooltip: 'Done',
+                onPressed: () {
+                  if (widget.onComplete != null && _jsonConnection != null) {
+                    widget.onComplete!(BleJsonConnectionResult.success(
+                      jsonConnection: _jsonConnection!,
+                      deviceConnection: _connection!,
+                      selectedService: _selectedService!,
+                      selectedCharacteristic: _selectedCharacteristic!,
+                    ));
+                  }
+                  Navigator.of(context).pop();
+                },
+              ),
           ],
+        ),
+        body: SingleChildScrollView(
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              // Scan section
+              BleScanSection(
+                statusMessage: _statusMessage,
+                isScanning: _isScanning,
+                onStartScan: _startScan,
+                onStopScan: _stopScan,
+              ),
+              const SizedBox(height: 16),
+
+              // Device list section
+              BleDeviceListSection(
+                devices: _devices,
+                connectedDeviceId: _connection?.deviceInfo.id,
+                onDeviceTap: _connection == null
+                    ? (device) => _connectToDevice(device)
+                    : null,
+              ),
+              if (_devices.isNotEmpty) const SizedBox(height: 16),
+
+              // Connection section
+              BleConnectionSection(
+                connection: _connection,
+                onDisconnect: _disconnect,
+              ),
+              if (_connection != null) const SizedBox(height: 16),
+
+              // GATT section
+              BleGattSection(
+                gattInfo: _gattInfo,
+                onCharacteristicSelected: _selectCharacteristic,
+              ),
+              if (_gattInfo != null) const SizedBox(height: 16),
+
+              // JSON section
+              BleJsonSection(
+                selectedService: _selectedService,
+                selectedCharacteristic: _selectedCharacteristic,
+                jsonConnection: _jsonConnection,
+                jsonController: _jsonController,
+                onSend: _sendJson,
+              ),
+            ],
+          ),
         ),
       ),
     );
   }
 }
+
