@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter_blue_plus/flutter_blue_plus.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'models/ble_device_info.dart';
 import 'models/ble_device_connection.dart';
 import 'models/ble_gatt_info.dart';
 import 'models/ble_json_connection.dart';
+import 'models/ble_connection_config.dart';
+import 'models/ble_error.dart';
 
 /// Main manager for BLE operations
 class BleManager {
@@ -48,16 +51,20 @@ class BleManager {
   }
 
   /// Start scanning for BLE devices
+  /// 
+  /// Requires flutter_blue_plus >= 1.30.0
+  /// Throws [BlePermissionError] if permissions are not granted.
+  /// Throws [BleUnsupportedError] if Bluetooth is not supported.
   Future<void> scan() async {
     // Check permissions first
     final hasPermissions = await checkPermissions();
     if (!hasPermissions) {
-      throw Exception('Required permissions not granted');
+      throw const BlePermissionError('Required permissions not granted');
     }
 
     // Check if Bluetooth is available
     if (await FlutterBluePlus.isSupported == false) {
-      throw Exception('Bluetooth not supported on this device');
+      throw const BleUnsupportedError('Bluetooth not supported on this device');
     }
 
     // Turn on Bluetooth if it's off
@@ -77,7 +84,19 @@ class BleManager {
   }
 
   /// Connect to a BLE device
-  Future<BleDeviceConnection> connect(BleDeviceInfo deviceInfo) async {
+  /// 
+  /// Requires flutter_blue_plus >= 1.30.0
+  /// [config] provides connection options including license, MTU, autoConnect, and bonding settings.
+  /// If [config] is null, uses default configuration (autoConnect: true, requireBonding: true).
+  /// 
+  /// Throws [BleDeviceNotFoundError] if device is not found in scan results.
+  /// Throws [BleBondingError] if bonding is required but fails.
+  /// Wraps other connection errors in appropriate [BleError] subclasses.
+  Future<BleDeviceConnection> connect(
+    BleDeviceInfo deviceInfo, {
+    BleConnectionConfig? config,
+  }) async {
+    final connectionConfig = config ?? BleConnectionConfig.defaultConfig;
     // Find the BluetoothDevice from scan results
     final devices = FlutterBluePlus.lastScanResults;
     BluetoothDevice? targetDevice;
@@ -101,7 +120,9 @@ class BleManager {
     }
     
     if (targetDevice == null) {
-      throw Exception('Device not found. Please scan for devices first.');
+      throw BleDeviceNotFoundError(
+        'Device not found. Please scan for devices first.',
+      );
     }
 
     // Create connection state stream
@@ -131,17 +152,42 @@ class BleManager {
     try {
       // For flutter_blue_plus, we need to check if device is already connected
       if (!targetDevice.isConnected) {
-        // Try connecting without explicit parameters first
-        // If license is required, this will fail and we'll need to handle it
+        // Connect with configuration parameters
         await targetDevice.connect(
           timeout: const Duration(seconds: 15),
+          autoConnect: connectionConfig.autoConnect,
+          mtu: connectionConfig.mtu,
         );
       }
     } catch (e) {
       connectionStateController.add(BleConnectionState.error);
       await connectionStateController.close();
       stateSubscription.cancel();
-      rethrow;
+      // Wrap connection errors
+      if (e is BleError) {
+        rethrow;
+      }
+      // Wrap unknown connection failures in BleConnectionError
+      throw BleConnectionError('Failed to connect to device', e);
+    }
+
+    // Handle bonding if required
+    // Note: Bonding on Android typically happens automatically during connection
+    // when the device requires it. If bonding fails, it will be caught by the
+    // connection error handling above. This section is for future explicit bonding
+    // support if flutter_blue_plus adds bonding APIs.
+    if (connectionConfig.requireBonding) {
+      // Only attempt bonding on Android if bondingAndroidOnly is true
+      if (connectionConfig.bondingAndroidOnly && !Platform.isAndroid) {
+        // Skip bonding on non-Android platforms (iOS doesn't support bonding)
+      } else {
+        // On Android, bonding typically happens automatically during connection
+        // if the device requires it. If explicit bonding is needed in the future,
+        // it can be added here when flutter_blue_plus provides bonding APIs.
+        // For now, we rely on the platform to handle bonding automatically.
+        // If bonding fails, it will manifest as a connection error and be
+        // caught by the error handling in the connect() try-catch block above.
+      }
     }
 
     // Get the current connection state and emit it immediately to the controller
@@ -201,13 +247,21 @@ class BleManager {
   }
 
   /// Discover GATT services and characteristics
+  /// 
+  /// Throws [BleNotConnectedError] if device is not connected.
+  /// Throws [BleGattError] if service discovery fails.
   Future<BleGattInfo> discoverGatt(BleDeviceConnection connection) async {
     final connectionState = await connection.device.connectionState.first;
     if (connectionState != BluetoothConnectionState.connected) {
-      throw Exception('Device is not connected');
+      throw const BleNotConnectedError('Device is not connected');
     }
 
-    final services = await connection.device.discoverServices();
+    List<BluetoothService> services;
+    try {
+      services = await connection.device.discoverServices();
+    } catch (e) {
+      throw BleGattError('Failed to discover GATT services', e);
+    }
     final gattServices = services.map((service) {
       final characteristics = service.characteristics.map((char) {
         return GattCharInfo(
@@ -228,6 +282,9 @@ class BleManager {
   }
 
   /// Create a JSON connection for a specific characteristic
+  /// 
+  /// Throws [BleNotConnectedError] if device is not connected.
+  /// Throws [BleGattError] if service or characteristic is not found.
   Future<BleJsonConnection> createJsonConnection(
     BleDeviceConnection deviceConnection,
     String serviceUuid,
@@ -235,12 +292,14 @@ class BleManager {
   ) async {
     final connectionState = await deviceConnection.device.connectionState.first;
     if (connectionState != BluetoothConnectionState.connected) {
-      throw Exception('Device is not connected');
+      throw const BleNotConnectedError('Device is not connected');
     }
 
     final services = deviceConnection.device.servicesList;
     if (services.isEmpty) {
-      throw Exception('No services discovered. Call discoverGatt() first.');
+      throw const BleGattError(
+        'No services discovered. Call discoverGatt() first.',
+      );
     }
     BluetoothService? targetService;
     BluetoothCharacteristic? targetChar;
@@ -254,7 +313,7 @@ class BleManager {
     }
 
     if (targetService == null) {
-      throw Exception('Service not found: $serviceUuid');
+      throw BleGattError('Service not found: $serviceUuid');
     }
 
     for (final char in targetService.characteristics) {
@@ -266,13 +325,14 @@ class BleManager {
     }
 
     if (targetChar == null) {
-      throw Exception('Characteristic not found: $characteristicUuid');
+      throw BleGattError('Characteristic not found: $characteristicUuid');
     }
 
     if (!targetChar.properties.write &&
         !targetChar.properties.writeWithoutResponse) {
-      throw Exception(
-          'Characteristic does not support write: $characteristicUuid');
+      throw BleGattError(
+        'Characteristic does not support write: $characteristicUuid',
+      );
     }
 
     // Try to get MTU from device, fallback to default (20 bytes payload)

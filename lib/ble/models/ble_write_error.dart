@@ -1,16 +1,7 @@
-/// Exception thrown when a BLE write operation fails
-class BleWriteError implements Exception {
-  final String message;
-  final Object? originalError;
+import 'ble_error.dart';
 
-  BleWriteError(this.message, [this.originalError]);
-
-  @override
-  String toString() {
-    if (originalError != null) {
-      return 'BleWriteError: $message (original error: $originalError)';
-    }
-    return 'BleWriteError: $message';
-  }
+/// Error thrown when a BLE write operation fails
+class BleWriteError extends BleError {
+  const BleWriteError(super.message, [super.originalError]);
 }
 
