@@ -45,3 +45,4 @@ app.*.map.json
 /android/app/release
 
 current_task.md
+.cursor/plans/ble_module_issues.md
