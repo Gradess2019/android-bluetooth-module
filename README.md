@@ -15,7 +15,21 @@ A Flutter library for Bluetooth Low Energy (BLE) device communication with JSON 
 
 ## Installation
 
-Add this package to your `pubspec.yaml` as a local path dependency:
+### Option 1: Git Dependency (Recommended for GitHub)
+
+Add this package to your `pubspec.yaml` as a git dependency:
+
+```yaml
+dependencies:
+  neo_bluetooth_module:
+    git:
+      url: https://github.com/Gradess2019/android-bluetooth-module.git
+      ref: master  # or use a specific tag/commit
+```
+
+### Option 2: Local Path Dependency
+
+Alternatively, you can use a local path dependency:
 
 ```yaml
 dependencies:
@@ -416,8 +430,10 @@ flutter run
 
 ## License
 
-This package is marked as `publish_to: 'none'` and is intended for local use only.
+This package is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
+
+Copyright (c) 2025 Gradess Games
 
 ## Contributing
 
-This is a private library. For issues or feature requests, please contact the maintainers.
+This repository is read-only and publicly visible for reference purposes. This library is maintained by Gradess Games. For issues or feature requests, please contact the maintainers.
