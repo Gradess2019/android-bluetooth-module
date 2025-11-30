@@ -313,3 +313,4 @@ class _BleDemoPageState extends State<BleDemoPage> {
     );
   }
 }
+
