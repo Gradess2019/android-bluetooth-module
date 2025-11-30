@@ -32,6 +32,7 @@ migrate_working_dir/
 .pub-cache/
 .pub/
 /build/
+.cursor/
 
 # Symbolication related
 app.*.symbols
@@ -45,3 +46,4 @@ app.*.map.json
 /android/app/release
 
 current_task.md
+.cursor/plans/ble_module_issues.md
